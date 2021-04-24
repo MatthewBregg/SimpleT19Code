@@ -752,6 +752,9 @@ void updateSpeedFixed() {
   unsigned long setpointGovernor = (320000000 / (setpointRPM * motorPolepairs)); //Convert to governor, which is 8 * TIMING_MAX (i.e. TIMING_MAX * CPU_MHZ (=16) / 2) at full resolution
   speedSetpoint = ((3 * setpointGovernor) / 16);                   //Convert to tach: 6 * TIMING_MAX / 4
   //Update margin for Orthomatic control. For now trying linear with RPM request like this
+  // AHA: I FOUND THE BUG, IT"S RIGHT HERE!!!!!!!!!!!!!
+  // THIS SHADOWS THE ACTUAL SPEED OFFSET MARGIN, WHICH OF COURSE IS NEEDED TO DETERMINE IF A PULSE IS VALID
+  // INFACt, THE VALUE OF SPEEDOFFSETMARGIN WAS UNDEFINED, WHICH WOULD EXPLAIN EVERYTHING.
   unsigned long speedOffsetMargin = map(setpointRPM, minRPM, maxRPM, speedOffsetMarginMin, speedOffsetMarginMax);
   //Push governor update
   governor = setpointGovernor;

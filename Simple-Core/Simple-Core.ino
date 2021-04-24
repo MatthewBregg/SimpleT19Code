@@ -1,8 +1,27 @@
- //// PINOUTS - S-Core 1.0/1.5
- // AVR pin - Arduino IDE pin - functionality
- // Input
- // PC1 - A1 - VOLTIMETER
 
+////S-Core Blaster Controller Firmware
+////Version 0.98
+////by torukmakto4
+////DZ Industries
+////This is part of Project T19
+////Forever Open - Forever Independent
+////Project T19 and this Software (DZ Core) are released under the Creative Commons BY-SA 4.0 license.
+////https://creativecommons.org/licenses/by-sa/4.0/
+////This is free and open source software.
+////You may use or modify it for any purpose. No warranty or guarantee of fitness for any purpose is provided.
+////It may be included in a product for sale, given that attribution is provided,
+////and that if altered, the modified source is made publically available in a very clear manner.
+////ANY DERIVATIVE OF THIS PRODUCT MUST BE PUBLISHED UNDER THE ORIGINAL LICENSE.
+////No attempt to circumvent/thwart access or obfuscate its release by any technical measure may be made.
+////In the end:
+////Please arms race responsibly,
+////don't be greedy,
+////and respect the sporting spirit of our great hobby,
+////above all else.
+////DBAD.
+
+
+// PC1 - A1 - VOLTIMETER
 // - A4 - DRV8825 Step signal. Output. Rising edge triggered.
 const int step_pin = A4; // Good, no change here from stock firmware!
 // - A5 - DRV8825 Direction signal. Output.
@@ -32,6 +51,8 @@ const int enable_pin = 8;
 
 int           alarm_want                  = 0;     //Load nonzero value on STC abort to get alarm before driver shutdown. 1 for _beeep_ and anything else for ^beep^-_beep_.
 // Stepper drive variables:
+//// This uses the per-cycle lightweight calculation of stepper commutation period described in
+//// http://hwml.com/LeibRamp.pdf
 //BOLT DRIVE PARAMETERS - don't mess with these unless you know what you are doing
 const unsigned long startSpeed = 400; //us (default 400 - leave alone)
 const unsigned long shiftSpeed = 150; //us (default 150)
@@ -122,7 +143,7 @@ unsigned long selftestTimeStartedTaching;         //=millis() when tach counting
 unsigned long speedtrap_buf0;                     //Add every successive read to this and /2 (LSR) it. Rolling-average low pass filter thingy. May be later implemented for fire control (not floor test)
 unsigned long speedtrap_buf1;                     //Ditto for drive 1 (Done simultaneously)
 unsigned long speedtrap_offsetMargin      = 20;   //Increment goodTachCount in speedtrap when both buffers within this distance of the setpoint
-unsigned long speedtrap_overspeedTripMargin = 50; //Unfiltered "critical overspeed" detector uses this. Fails on any single pulse shorter than this after a delay to account for any initial desyncs
+unsigned long speedtrap_overspeedTripMargin = 65; //Unfiltered "critical overspeed" detector uses this. Fails on any single pulse shorter than this after a delay to account for any initial desyncs
 
 
 
@@ -700,8 +721,8 @@ void setup(){
   pinMode(3, INPUT_PULLUP);
   //pin 0 and 1 trigger switch
   //(If the trigger doesn't work, flip the connector)
-  pinMode(0, INPUT);
-  pinMode(1, INPUT);
+  pinMode(trig_a_pin, INPUT);
+  pinMode(trig_b_pin, INPUT);
  
   //pin 9,10 flywheel motor controller PWM throttle signal
   pinMode(9, OUTPUT);
