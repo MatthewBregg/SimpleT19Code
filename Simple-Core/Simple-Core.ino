@@ -35,7 +35,7 @@ int           alarm_want                  = 0;     //Load nonzero value on STC a
 //BOLT DRIVE PARAMETERS - don't mess with these unless you know what you are doing
 const unsigned long startSpeed = 400; //us (default 400 - leave alone)
 const unsigned long shiftSpeed = 150; //us (default 150)
-const unsigned long runSpeedMax = 75000/(500 /* Rounds Per minute */); //Bolt speed absolute maximum - limit precisely
+const unsigned long runSpeedMax = 75000/(720 /* Rounds Per minute */); //Bolt speed absolute maximum - limit precisely
 const double accelPhaseOne = 0.000000253494; //m value for ramp in low speed region
 const double accelPhaseTwo = 0.000000180748; //m value for ramp in high speed region
 const double decel =         0.000000439063; //m value for hard decel
@@ -79,22 +79,18 @@ volatile boolean drive1TachValid = false;
 ////Orthomatic - Tach based STC variables.
 volatile unsigned long speedSetpoint;     //us (6 * TIMING_MAX / 4)
 int goodTachsToFire = 5;                  //how many consecutive good readings to consider motors to be stable and start bolt motion?
-unsigned long minRPM = 5000;              //Fly speed command min (Set this appropriately for your system to ensure passing darts at minimum speed)
-unsigned long maxRPM = 44000;             //Fly speed command max (Set this appropriately. If the drive can't actually reach this speed you won't be able to fire!)
-unsigned long speedOffsetMargin;          //Consider tach in range if speedOffsetMargin is greater than (lower speed) speedSetpoint
+unsigned long speedOffsetMargin;          //Consider tach in range if speedOffsetMargin us greater than (lower speed) speedSetpoint
 unsigned long speedOffsetMarginMin = 45;  //At low speed   (This compensates competing effects from period being 1/f, control loop performance, and tach resolution so isn't much more
-// 21: 1/5 shots were slow... 13: Probably too much. (21+13)/2 = 17?
-// Nope, 17 didn't work either. Seems we really don't want to go much past 13.!
-// 16 actually seems good, actually, I think those 1/5 shots being slow might just be random variance, seems to occur at 13 also, so either 13 is still too much, or interpolation is wrong, or whatever.
-// We're talking values like 108 instead of 120 anyway, so I'm willing to ignore it.
-unsigned long speedOffsetMarginMax = 16;  //At max speed    than a fudge factor) ;; TODO: Do I need to update this?!
-// With the 25510 governer, we started firing at ~24K.  I set us to fire at about 38.2K when running at 40K RPM.  Hopefully that'll be be enough?
+unsigned long speedOffsetMarginMax = 22;  //At max speed    than a fudge factor)
 int goodTachCount = 0;                    //counter for loops with good speed reading
 unsigned long startBlankTime  = 1;        //actually delay step for tach checks
 unsigned long failTime = 1000;            //Abort if drives don't either send tach pulses or reach set speed in a reasonable time.
 unsigned long lastTriggerDown;            //(ms) time trigger pulled
+unsigned long minRPM = 8000;              //Fly speed command min (Set this appropriately for your system to ensure passing darts at minimum speed)
+unsigned long maxRPM = 30000;             //Fly speed command max (Set this appropriately. If the drive can't actually reach this speed you won't be able to fire!)
 
-unsigned long setpointGovernor;           //Convert RPM to governor (8 * TIMING_MAX)
+
+////Speed/Analog control variables.
 unsigned long motorPolepairs = 7;         //Pole order of your flywheel motors
 
 //fire control state variables section
@@ -397,35 +393,44 @@ void error(int major, int minor) {
   return;
 }
 
-void selftest(){
+void selftest() {
   //Power-on selftest routine (new 14-Feb-20).
   delay(500); //allow some time for drives to boot up and all voltages to stabilize and so forth (depending on when this is called)
-  
+
+  //Is the bolt drive alive? Turn motor current on and growl
+  digitalWrite(enable_pin, LOW);
+  //Wait for 8825 to stabilize, likely not required.
+  delay(20);
+  //Growl once (Like old world t19s do) - It is hard to self-detect if the pusher inverter is working aside from moving it later on, and if it is not, we have no voice to warn anyone anyway!!
+  //So the single growl is the telltale.
+  stepper_growl();
+  delay(20);                        //Wait any vibration to subside (so motor doesn't bounce if unlocked immediately after growling)
+  //Turn current off.
+  digitalWrite(enable_pin, HIGH);
   //Rest of bolt checks after flywheel drive rotation check so we can do reverseBoltToSwitch with flywheels spinning at low speed to eject any darts or debris,
   //if the act of resetting the bolt dislodges or feeds anything accidentally. Sometimes it does.
-  // NOTE: For a rival continous feed system, I don't think we have a good way of testing the feed on poweron.
-  // However, for a more traditional scotch yoke dart system, it does make a lot of sense to check we are homed.
-  // And thus, the code to check for homing and eject debris should probably be readded!
-  // Possibly behind a flag. But for now, KISS and delete that code.
-  // TODO: Perhaps in the future if I add something to block reversing the pusher causing balls to go where they shouldn't add some kind of reverse and check here?
-  
+
   //Trigger invalid state detection:
   //The complementary trigger input must have one line HIGH and one LOW at any given time unless the switch is moving.
   //Two highs is a broken or fouled switch, a bad connection or most likely, an unplugged cable.
   //Two lows is probably a short or the wrong device plugged into the trigger connector.
-  
-  if(digitalRead(trig_a_pin) && digitalRead(trig_b_pin)) {die(2, 1);} //Major 2 minor 1: Trigger fault both inputs high
-  if(!digitalRead(trig_a_pin) && !digitalRead(trig_b_pin)) {die(2, 2);} //Major 2 minor 2: Trigger fault both inputs low
-  
+
+  if (digitalRead(trig_a_pin) && digitalRead(trig_b_pin)) {
+    die(2, 1); //Major 2 minor 1: Trigger fault both inputs high
+  }
+  if (!digitalRead(trig_a_pin) && !digitalRead(trig_b_pin)) {
+    die(2, 2); //Major 2 minor 2: Trigger fault both inputs low
+  }
+
   //End trigger checks.
-  
+
   //Flywheel drive checks.
   //BEFORE enabling edge-triggered tach input, attempt to verify line integrity:
   //Drive channel 0 (M1F)
   selftestTachIntegChecks = 0;                                     //Zero counter first
   selftestTachState = digitalRead(2);                              //Capture initial logic state
-  while(selftestTachIntegChecks < selftestTachIntegCheckCount) {   //Loop until enough checks done
-    if(selftestTachState == digitalRead(2)) {                      //Same logic state?
+  while (selftestTachIntegChecks < selftestTachIntegCheckCount) {  //Loop until enough checks done
+    if (selftestTachState == digitalRead(2)) {                     //Same logic state?
       selftestTachIntegChecks++;                                   //Yes - Increment check counter
       delayMicroseconds(selftestTachIntegPollTime);                //Wait 1 polling period before next read
     } else {                                                       //Landed here: Pin changed state while we were looking at it. FAILED
@@ -435,8 +440,8 @@ void selftest(){
   //Drive channel 1 (M2F)
   selftestTachIntegChecks = 0;                                     //Zero counter first
   selftestTachState = digitalRead(3);                              //Capture initial logic state
-  while(selftestTachIntegChecks < selftestTachIntegCheckCount) {   //Loop until enough checks done
-    if(selftestTachState == digitalRead(3)) {                      //Same logic state?
+  while (selftestTachIntegChecks < selftestTachIntegCheckCount) {  //Loop until enough checks done
+    if (selftestTachState == digitalRead(3)) {                     //Same logic state?
       selftestTachIntegChecks++;                                   //Yes - Increment check counter
       delayMicroseconds(selftestTachIntegPollTime);                //Wait 1 polling period before next read
     } else {                                                       //Landed here: Pin changed state while we were looking at it. FAILED
@@ -455,25 +460,25 @@ void selftest(){
   //Drive 0 - Motor start NOW
   OCR1A = 500;                                                     //Floored throttle
   selftestTimeStartedTaching = millis();                           //Record start timestamp
-  while(!drive0TachValid) {                                        //Loop while still invalid
-    if((millis() - selftestTimeStartedTaching) > selftestTachTimeout) {
+  while (!drive0TachValid) {                                       //Loop while still invalid
+    if ((millis() - selftestTimeStartedTaching) > selftestTachTimeout) {
       die(3, 3);                                                   //Hit timeout waiting for signal = Code 33, drive 0 no speed feedback
     }
   }                                                                //Fall through to here iff the tach is valid and there is time left
   goodTachCount = 0;                                               //Clear
   selftestTachMulligans = 0;                                       //Clear
-  while(goodTachCount < selftestGoodTachs) {
+  while (goodTachCount < selftestGoodTachs) {
     delayMicroseconds(selftestTachSpinFloor);                      //Abuse pulse period we're looking for as appropriate polling period to check for it
-    if(pulseLength0 < selftestTachSpinFloor) {
+    if (pulseLength0 < selftestTachSpinFloor) {
       goodTachCount++;                                             //Above the floor? another tally mark on the wall
     } else {
       selftestTachMulligans++;                                     //But also track how many bad pulses we have got in this cycle
     }
-    if(selftestTachMulligans > selftestMaxTachMulligans) {         //Too many bad tachs in this cycle, start over
+    if (selftestTachMulligans > selftestMaxTachMulligans) {        //Too many bad tachs in this cycle, start over
       goodTachCount = 0;
       selftestTachMulligans = 0;
     }
-    if((millis() - selftestTimeStartedTaching) > selftestTachTimeout) {
+    if ((millis() - selftestTimeStartedTaching) > selftestTachTimeout) {
       die(3, 4);                                                   //Timed out = code 34: drive 0 no rotation
     }
   }                                                                //Reached this point = drive 0 PASSES rotation check.
@@ -483,34 +488,51 @@ void selftest(){
   //Drive 1 - Motor start NOW
   OCR1B = 500;                                                     //Floored throttle
   selftestTimeStartedTaching = millis();                           //Record start timestamp
-  while(!drive1TachValid) {                                        //Loop while still invalid
-    if((millis() - selftestTimeStartedTaching) > selftestTachTimeout) {
+  while (!drive1TachValid) {                                       //Loop while still invalid
+    if ((millis() - selftestTimeStartedTaching) > selftestTachTimeout) {
       die(3, 5);                                                   //Hit timeout waiting for signal = Code 35, drive 1 no speed feedback
     }
   }                                                                //Fall through to here iff the tach is valid and there is time left
   goodTachCount = 0;                                               //Clear
   selftestTachMulligans = 0;                                       //Clear
-  while(goodTachCount < selftestGoodTachs) {
+  while (goodTachCount < selftestGoodTachs) {
     delayMicroseconds(selftestTachSpinFloor);                      //Abuse pulse period we're looking for as appropriate polling period to check for it
-    if(pulseLength1 < selftestTachSpinFloor) {
+    if (pulseLength1 < selftestTachSpinFloor) {
       goodTachCount++;                                             //Above the floor? another tally mark on the wall
     } else {
       selftestTachMulligans++;                                     //But also track how many bad pulses we have got in this cycle
     }
-    if(selftestTachMulligans > selftestMaxTachMulligans) {         //Too many bad tachs in this cycle, start over
+    if (selftestTachMulligans > selftestMaxTachMulligans) {        //Too many bad tachs in this cycle, start over
       goodTachCount = 0;
       selftestTachMulligans = 0;
     }
-    if((millis() - selftestTimeStartedTaching) > selftestTachTimeout) {
+    if ((millis() - selftestTimeStartedTaching) > selftestTachTimeout) {
       die(3, 6);                                                   //Timed out = code 36: drive 1 no rotation
     }
   }                                                                //Reached this point = drive 1 PASSES rotation check.
-  OCR1B = 230;                                                     //Drive 1 shutdown.  
+  OCR1B = 230;                                                     //Drive 1 shutdown.
   disableTachInterrupts();                                         //Done, take ISRs out of gear
   drive0TachValid = false;                                         //Clear for later
   drive1TachValid = false;
   //End flywheel drive checks.
-  
+
+  //Attempt to establish bolt home position. We want to do this with flywheel drives enabled at a low speed so as to spit out any accidentally fed dart or trash that dislodges from cage
+  //when running the bolt home. Since the drives haven't had a speed set, they are at default ~5000rpm (for 14 pole) and anything mistakenly launched will go about 36fps.
+  //Turn bolt motor current on
+  digitalWrite(enable_pin, LOW);
+  //Wait for 8825 to stabilize, likely not required.
+  delay(20);
+  //Enable flywheel drives (Avoid latency between this and reverseBoltToSwitch return if already home to avoid the drives having time to turn current on for a moment if unnecessary)
+  OCR1A = 500;                      //Max torque
+  OCR1B = 500;                      //Nb: 5000rpm governor by default
+  if (!reverseBoltToSwitch()) {     //Attempt to find home with up to 1 full revolution (Returns true immediately without motion if already home)
+    die(1, 1);                      //Major 1 minor 1: Bolt drive fault, homing failed
+  }
+  OCR1A = 230;                      //Disable
+  OCR1B = 230;
+  //Turn bolt motor current off.
+  digitalWrite(enable_pin, HIGH);
+  //End bolt checks.
   //End POST.
 }
 
@@ -530,30 +552,30 @@ void speedtrap(void) {
   OCR1A = 500;                                   //Start motors
   OCR1B = 500;
   delay(30);                                     //Tachs should be valid after this delay.
-  if(!drive0TachValid) {                         //No signal?
+  if (!drive0TachValid) {                        //No signal?
     die(4, 1);                                   //Code 41, overspeed detector tach signal loss drive 0
   }
-  if(!drive1TachValid) {                         //No signal?
+  if (!drive1TachValid) {                        //No signal?
     die(4, 2);                                   //Code 42, overspeed detector tach signal loss drive 1
   }
   //Reached this point: Drives are still present and alive, emitting tach pulses and they are being received, start measuring them
   selftestTimeStartedTaching = millis();         //Record time of measurement start
-  while(goodTachCount < selftestGoodTachs) {     //Main loop (any exit from this is a success - all failures call die() and hang forever)
+  while (goodTachCount < selftestGoodTachs) {    //Main loop (any exit from this is a success - all failures call die() and hang forever)
     delayMicroseconds(speedSetpoint);            //Abuse target period as polling period
-    if(pulseLength0 < (speedSetpoint - speedtrap_overspeedTripMargin)) {
+    if (pulseLength0 < (speedSetpoint - speedtrap_overspeedTripMargin)) {
       die(4, 3);                                 //Instantaneous per-cycle overspeed trip. Code 43, drive 0 critical overspeed
     }
-    if(pulseLength1 < (speedSetpoint - speedtrap_overspeedTripMargin)) {
+    if (pulseLength1 < (speedSetpoint - speedtrap_overspeedTripMargin)) {
       die(4, 4);                                 //Instantaneous per-cycle overspeed trip. Code 44, drive 1 critical overspeed
     }
     //ONLY get to here if we didn't see a huge overshoot and abort already.
     //Filter speeds into averaged buffers (Dividing is bad juju but /2 should compile as a LSR/ROR and be fast, I believe)
     speedtrap_buf0 = (speedtrap_buf0 + pulseLength0) / 2;
-    speedtrap_buf1 = (speedtrap_buf1 + pulseLength1) / 2; 
-    if((speedtrap_buf0 < (speedSetpoint + speedtrap_offsetMargin)) && (speedtrap_buf0 > (speedSetpoint - speedtrap_offsetMargin))) {
+    speedtrap_buf1 = (speedtrap_buf1 + pulseLength1) / 2;
+    if ((speedtrap_buf0 < (speedSetpoint + speedtrap_offsetMargin)) && (speedtrap_buf0 > (speedSetpoint - speedtrap_offsetMargin))) {
       //Less (faster than) a margin above (slower than) the setpoint. Greater (slower than) a margin below (faster than) the setpoint: drive 0 - speed OK this cycle.
       //So check drive 1:
-      if((speedtrap_buf1 < (speedSetpoint + speedtrap_offsetMargin)) && (speedtrap_buf1 > (speedSetpoint - speedtrap_offsetMargin))) {
+      if ((speedtrap_buf1 < (speedSetpoint + speedtrap_offsetMargin)) && (speedtrap_buf1 > (speedSetpoint - speedtrap_offsetMargin))) {
         //Less (faster than) a margin above (slower than) the setpoint. Greater (slower than) a margin below (faster than) the setpoint: drive 1 - speed OK this cycle.
         //Both OK, increment.
         goodTachCount++;
@@ -569,7 +591,7 @@ void speedtrap(void) {
     //The problem is all the valid combinations of failing states. Needs a bit of addressing or else move to sampling each speed serially, like the POST rotation checker.
     //That cuts the mess and variables by a lot
     //I just wanted to have one quick, clean sounding rev after speed updating, versus delay the user from shooting intially after boot while we screw around revving up motors and measuring speeds.
-    if((millis() - selftestTimeStartedTaching) > selftestTachTimeout) {
+    if ((millis() - selftestTimeStartedTaching) > selftestTachTimeout) {
       //Still looping unsuccessfully and hit timeout
       die(4, 5);                                     //Code 45, flywheel drive speed verification failed (Why do I have the suspicion this will be a dreaded, baffling, common one)
     }
@@ -660,7 +682,7 @@ boolean setGovernorBoth(void) {
 }
 void updateSpeedFixed(unsigned long setpointRPM) {
   //Set setpointRPM from limitRPM only, update governor, push governor update, and update tach control parameters.
-  setpointGovernor = (320000000/(setpointRPM * motorPolepairs));   //Convert to governor, which is 8 * TIMING_MAX (i.e. TIMING_MAX * CPU_MHZ (=16) / 2) at full resolution
+  unsigned long setpointGovernor = (320000000/(setpointRPM * motorPolepairs));   //Convert to governor, which is 8 * TIMING_MAX (i.e. TIMING_MAX * CPU_MHZ (=16) / 2) at full resolution
   speedSetpoint = ((3 * setpointGovernor)/16);                     //Convert to tach: 6 * TIMING_MAX / 4
   //Update margin for Orthomatic control. For now trying linear with RPM request like this
   speedOffsetMargin = map(setpointRPM, minRPM, maxRPM, speedOffsetMarginMin, speedOffsetMarginMax);
@@ -724,24 +746,18 @@ void setup(){
 }
 
 void loop(){
-  if(firstRun) {
+  if (firstRun) {
     //Wait for SimonK boot and arm (TBD value, Selftest already waits 500ms)
     delay(500);
     //Do POST
     selftest();
     //Wait a moment and...
     delay(500);
-    // Set the speed
+    //default speed is tournament lock setting
     delay(100); //Some anti-noise buffer
-    while(gov_update_repeats) {
-      // 30K Full speed, 125-135, but rev time > 200 MS.
-      // 25K Slightly slower, 120-130.
-      // 20K Very consistent 110s...
-      // 23K Very consistent 120s-125s. Seems roughly ideal, rev time between 150 and 175 MS.
-      // Also keep in mind I plan on using ABS flywheels, which in theory should be significantly lighter and cut rev time down a fair bit!
-      // Other ideas would be to increase crush/inner wheel diameter/skimp on the infill/top/bottom/perimeters.
-      // But <175 MS FD really isn't bad, and if I really want a CQC focussed build I can just drop the FPS to ~100 and get much faster revs.
-      updateSpeedFixed(23000); //Nb: updateGovernorBoth blocks while a packet is being transmitted, thus so does this call.
+    while (gov_update_repeats) {
+      // Set speed to 20K RPM.
+      updateSpeedFixed(20000); //Nb: updateGovernorBoth blocks while a packet is being transmitted, thus so does this call.
       delay(20); //Some anti-noise buffer
       gov_update_repeats--;
     }
@@ -750,24 +766,28 @@ void loop(){
     //Verify set speed. Nb: Since this happens seamlessly after user-adjusting speed (the motors were still running) there is no "blip"
     speedtrap();                 //Bust any wrong flywheel speeds now before firing is allowed. Starts motors if they weren't already and shuts them down afterward.
     //Fell through = Cleared for launch.
+    //Initialize fire control and bolt speed
+    runSpeed = runSpeedMax;      // Run the bolt at max speed.
     //clear flag
     firstRun = 0;
   }
+
+
+
   disableGovernorInterrupt();    //It shouldn't have been on - make very sure
   //initial debounce on trigger from idle state. Safety measure.
   prevTrigState = currTrigState;
-  currTrigState = READTRIGGER();
-  if(currTrigState && prevTrigState){
-
+  currTrigState = (digitalRead(trig_a_pin) && !digitalRead(trig_b_pin));
+  if (currTrigState && prevTrigState) {
+    //turn motor current on
     digitalWrite(enable_pin, LOW);
-
     //enable tachs
     enableTachInterrupts();
-    unsigned long started_revving = millis();
     //start flywheels
     OCR1A = 500; //go
     OCR1B = 500; //go
-    
+
+
     ////Speed feedback STC section.
     //This project went at one point by "Orthomatic".
 
@@ -775,24 +795,32 @@ void loop(){
     lastTriggerDown = millis();
     //Wait for both drives to have vaild tach. This effectively checks that they are actively toggling their tach lines. These flags are cleared before we get here,
     //so the only thing that would have turned them on is the tach ISR.
-    while(!(drive0TachValid && drive1TachValid && ((millis() - lastTriggerDown) <= failTime))) {
+    while (!(drive0TachValid && drive1TachValid && ((millis() - lastTriggerDown) <= failTime))) {
       delay(1);
+
     }
-    if((millis()-lastTriggerDown) >= failTime) {
+    if ((millis() - lastTriggerDown) >= failTime) {
       //Whoops. We exited the invalid-tach trap because one or more drives failed to produce any speed feedback in a reasonable time. Perhaps something got unplugged.
+      //Disable tach:
+      disableTachInterrupts();
       //Shut down drives:
       OCR1A = 230;
       OCR1B = 230;
-      //Trap trigger down state here. Require a trigger reset to reattempt.
-      while(READTRIGGER()) {delay(5);}
+      //Set pending NoTach alarm (Single Low beep).
+      //Then trap trigger down state here. Require a trigger reset to reattempt.
+      alarm_want = 1;
+      while (READTRIGGER()) {
+        delay(5);
+      }
       goodTachCount = 0;
       lastTriggerUp = millis();
     } else {
+
       //We exited the invalid-tach trap because both tachs went valid. This is what's supposed to happen.
       //Wait for drives to reach speed and stay there for goodTachsToFire *consecutive* reads, and then fire. (0.95 - Robustness improvement)
-      while((goodTachCount < goodTachsToFire) && ((millis() - lastTriggerDown) <= failTime)) {
+      while ((goodTachCount < goodTachsToFire) && ((millis() - lastTriggerDown) <= failTime)) {
         //Increment goodTachCount every time both speeds are in range, with poll cycle about as long as the target period (little longer in practice)
-        if((pulseLength0 <= (speedSetpoint + speedOffsetMargin)) && (pulseLength1 <= (speedSetpoint + speedOffsetMargin))) {
+        if ((pulseLength0 <= (speedSetpoint + speedOffsetMargin)) /*&& (pulseLength1 <= (speedSetpoint + 4*speedOffsetMargin))*/) {
           goodTachCount++;
         } else {
           goodTachCount = 0;                     //Strictly reject any out of range reads (This is in the range of 3-7 reads in a row we're looking for to fire so no sense in allowing "mulligans")
@@ -800,34 +828,36 @@ void loop(){
         delayMicroseconds(speedSetpoint);        //Abuse target signal period as polling period
       }
       //We returned. But why? If it's a timeout, then goodTachCount will not have reached goodTachsToFire.
-      if(goodTachCount < goodTachsToFire) {
+      if (goodTachCount < goodTachsToFire) {
+          // We are getting stuck in here, why?
         //Whoops. We exited because: Drives failed to reach speed setpoint in a reasonable time.
+        //Disable tach:
+        disableTachInterrupts();
         //Shut down drives:
         OCR1A = 230;
         OCR1B = 230;
-        //Trap trigger down state here. Require a trigger reset to reattempt.
-        while(READTRIGGER()) {delay(1);}
+        //Set pending SpeedFail alarm ("Dead phone"), then trap trigger down state here. Require a trigger reset to reattempt.
+        alarm_want = 2;
+        while (READTRIGGER()) {
+          delay(1);
+        }
         goodTachCount = 0;
         lastTriggerUp = millis();
       } else {
         //Successful acceleration: start firing.
         //Already know speed is good at this point, mute tach ISRs
         disableTachInterrupts();
-	unsigned long rev_time = millis() - started_revving;
-  // We succeeded revving, time to start the pusher!
-	digitalWrite(LED_BUILTIN,HIGH);
+        fire();
 
-	fire();
-	// While the trigger remains down, keep firing.
-	while(READTRIGGER()) {
-	  fire();
-	}
-
+        //first sealed-in shot is over. Check trigger *quickly* for downness (Nb: We may be commutating the pusher right now) and fire again if down and called for. Trigger is PD0, PD1.
+        //This second fire() call may execute 0 times if isBurst is true and burstCounter starts as 1.
+        while (READTRIGGER()) {
+          fire();
+        }
         //Here, firing is definitely OVER. Get the bolt back safely to home position (N.b.: Flywheel Drives are still enabled right now, so any spurious feed from this is safe)
         if (!decelerateBoltToSwitch()) {
           reverseBoltToSwitch();
         }
-
         //Reset tach cycle counter
         goodTachCount = 0;
         //Shut down drives only NOW:
