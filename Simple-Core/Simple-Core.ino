@@ -777,7 +777,7 @@ void loop(){
     //default speed is tournament lock setting
     delay(100); //Some anti-noise buffer
     while (gov_update_repeats) {
-      // Set speed to 20K RPM.
+      // Set speed to 20K RPM, resulting in a solid ~155 FPS. Good for 160 FPS games (tested on OG RED T19).
       updateSpeedFixed(20000); //Nb: updateGovernorBoth blocks while a packet is being transmitted, thus so does this call.
       delay(20); //Some anti-noise buffer
       gov_update_repeats--;
@@ -841,7 +841,7 @@ void loop(){
       //Wait for drives to reach speed and stay there for goodTachsToFire *consecutive* reads, and then fire. (0.95 - Robustness improvement)
       while ((goodTachCount < goodTachsToFire) && ((millis() - lastTriggerDown) <= failTime)) {
         //Increment goodTachCount every time both speeds are in range, with poll cycle about as long as the target period (little longer in practice)
-        if ((pulseLength0 <= (speedSetpoint + speedOffsetMargin)) /*&& (pulseLength1 <= (speedSetpoint + 4*speedOffsetMargin))*/) {
+        if ((pulseLength0 <= (speedSetpoint + speedOffsetMargin)) && (pulseLength1 <= (speedSetpoint + speedOffsetMargin))) {
           goodTachCount++;
         } else {
           goodTachCount = 0;                     //Strictly reject any out of range reads (This is in the range of 3-7 reads in a row we're looking for to fire so no sense in allowing "mulligans")
