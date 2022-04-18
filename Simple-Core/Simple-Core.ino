@@ -579,6 +579,10 @@ void speedtrap(void) {
   if (!drive1TachValid) {                        //No signal?
     die(4, 2);                                   //Code 42, overspeed detector tach signal loss drive 1
   }
+ 
+  // Delay here to avoid any issues with EMF triggering a false overspeed.
+  delay(100);
+ 
   //Reached this point: Drives are still present and alive, emitting tach pulses and they are being received, start measuring them
   selftestTimeStartedTaching = millis();         //Record time of measurement start
   while (goodTachCount < selftestGoodTachs) {    //Main loop (any exit from this is a success - all failures call die() and hang forever)
